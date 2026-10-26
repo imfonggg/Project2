@@ -36,28 +36,28 @@ Most GPUs run double-precision arithmetic many times slower than single precisio
 
 ## 3. Experimental results
 
-All runs were on GAIVI (GPU: `<fill in>`), CUDA 11.4.
+All runs were on GAIVI (GPU: NVIDIA GeForce GTX 1080 Ti), CUDA 11.4. The CPU and GPU histograms matched exactly in every run.
 
 **Kernel time vs. number of points** (bucket width 500, block size 256):
 
 | Points | CPU (given) | GPU Project 1 | GPU Project 2 | Speedup vs. Project 1 |
 |---|---|---|---|---|
 | 10,000 | `<fill>` | `<fill>` | `<fill>` | `<fill>` |
-| 100,000 | `<fill>` | `<fill>` | `<fill>` | `<fill>` |
+| 100,000 | `<fill>` | `<fill>` | 0.0586 s | `<fill>` |
 | 500,000 | ~1 hour | `<fill>` | `<fill>` | `<fill>` |
 
 **Effect of block size** (100,000 points, bucket width 500):
 
 | Block size | 64 | 128 | 256 | 512 | 1024 |
 |---|---|---|---|---|---|
-| Kernel time | `<fill>` | `<fill>` | `<fill>` | `<fill>` | `<fill>` |
+| Kernel time | `<fill>` | `<fill>` | 0.0586 s | `<fill>` | `<fill>` |
 
 **Effect of bucket width** (100,000 points, block size 256):
 
 | Bucket width | 2000 | 500 | 100 | 10 | 1 |
 |---|---|---|---|---|---|
 | Buckets | 20 | 80 | 399 | 3,984 | 39,837 |
-| Kernel time | `<fill>` | `<fill>` | `<fill>` | `<fill>` | `<fill>` |
+| Kernel time | `<fill>` | 0.0586 s | `<fill>` | `<fill>` | `<fill>` |
 
 ## 4. Discussion
 
