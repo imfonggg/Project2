@@ -45,7 +45,9 @@ Most GPUs run double-precision arithmetic many times slower than single precisio
 | 1,000 | 499,500 | not measured | 0.0002 s | n/a |
 | 10,000 | 49,995,000 | *pending* | *pending* | *pending* |
 | 100,000 | 4,999,950,000 | 101.23 s | 0.0586 s | **1,726x** |
-| 500,000 | 124,999,750,000 | *pending* | *pending* | *pending* |
+| 500,000 | 124,999,750,000 | ~1 hour (assignment reference) | not measured* | n/a |
+
+\*The 500,000-point run could not finish: the CPU baseline alone takes about an hour, which exceeds the 1-hour limit on GAIVI course jobs.
 
 I repeated the 100,000-point run, and it took 0.0586 s and 0.0589 s, so the timing is stable to within about 0.5%. At 100,000 points the kernel processes about **85 billion point pairs per second** (4.99995 x 10^9 pairs / 0.0586 s).
 
