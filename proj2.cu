@@ -48,13 +48,11 @@
 #define DEFAULT_SMEM_BYTES	(48 * 1024)
 #define COPIES_SMEM_BYTES	(16 * 1024)
 #define MAX_HIST_COPIES		16
+
+//Optional: show the CPU running time and speedup over CPU
+#define SHOW_EXTRA_TIMING	1
  
-/* Optional extra output, as in Project 1: CPU running time and GPU speedup.
-   Set to 1 for timing experiments. Keep it 0 for submission, since the
-   required output is only the histograms, differences and kernel time. */
-#define SHOW_EXTRA_TIMING	0
- 
-/* descriptors for single atom in the tree */
+
 typedef struct atomdesc {
 	double x_pos;
 	double y_pos;
