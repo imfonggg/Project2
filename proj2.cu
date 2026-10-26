@@ -1,33 +1,3 @@
-/* ==================================================================
-	Programmer: Phong Lien
-	Project 2: Optimized Spatial Distance Histogram (SDH) on GPUs
-	Based on the basic SDH code by Yicheng Tu (ytu@cse.usf.edu)
- 
-	To run: /apps/GPU_course/runScript.sh proj2.cu {#of_samples} {bucket_width} {block_size}
- 
-	GPU optimizations (see report for details):
-	  1. Points are stored as structure-of-arrays (SoA) so tile loads
-	     from global memory are fully coalesced.
-	  2. Tiling: each block keeps its own tile of points in registers
-	     and streams other tiles through shared memory, so every point
-	     loaded from global memory is reused blockDim.x times.
-	  3. Load balancing: with M tiles, block i pairs with the next M/2
-	     tiles (circularly), so every block does the same amount of work
-	     instead of the triangular i<j split.
-	  4. Privatized output: each block keeps several copies of the
-	     histogram in shared memory (one per group of warps) using
-	     32-bit counters, then merges them into global memory once.
-	  5. Large histograms: if the histogram does not fit in shared
-	     memory, the most heavily used window of buckets is cached in
-	     shared memory and the remaining buckets go to global memory.
-	  6. Fast exact distances: distances are computed in single
-	     precision and only pairs that land within a small safety margin
-	     of a bucket boundary are recomputed in double precision, using
-	     the same operation order as the CPU code, so the GPU histogram
-	     is identical to the CPU histogram.
-   ==================================================================
-*/
- 
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -37,19 +7,14 @@
 #include <cuda_runtime.h>
  
  
-#define BOX_SIZE	23000 /* size of the data box on one dimension            */
- 
-/* Safety margin (in distance units) for the single-precision filter.
-   The float distance differs from the exact double distance by less than
-   0.02 for coordinates in [0, BOX_SIZE], so 0.1 leaves a wide margin.   */
+#define BOX_SIZE	23000
+
 #define FLOAT_MARGIN	0.1f
- 
-/* Shared memory limits for the private histogram copies */
+
 #define DEFAULT_SMEM_BYTES	(48 * 1024)
 #define COPIES_SMEM_BYTES	(16 * 1024)
 #define MAX_HIST_COPIES		16
 
-//Optional: show the CPU running time and speedup over CPU
 #define SHOW_EXTRA_TIMING	1
  
 
@@ -60,19 +25,15 @@ typedef struct atomdesc {
 } atom;
  
 typedef struct hist_entry{
-	//float min;
-	//float max;
-	long long d_cnt;   /* need a long long type as the count might be huge */
+	long long d_cnt;
 } bucket;
  
+bucket * histogram;
+long long	PDH_acnt;
+int num_buckets;
+double   PDH_res;
+atom * atom_list;
  
-bucket * histogram;		/* list of all buckets in the histogram   */
-long long	PDH_acnt;	/* total number of data points            */
-int num_buckets;		/* total number of buckets in the histogram */
-double   PDH_res;		/* value of w                             */
-atom * atom_list;		/* list of all data points                */
- 
-/* These are for an old way of tracking time */
 struct timezone Idunno;
 struct timeval startTime, endTime;
  
@@ -87,9 +48,6 @@ struct timeval startTime, endTime;
 	} while (0)
  
  
-/*
-	distance of two points in the atom_list
-*/
 double p2p_distance(int ind1, int ind2) {
  
 	double x1 = atom_list[ind1].x_pos;
@@ -103,9 +61,6 @@ double p2p_distance(int ind1, int ind2) {
 }
  
  
-/*
-	brute-force SDH solution in a single CPU thread
-*/
 int PDH_baseline() {
 	int i, j, h_pos;
 	double dist;
@@ -120,9 +75,6 @@ int PDH_baseline() {
 	return 0;
 }
  
-/*
-	set a checkpoint and show the (natural) running time in seconds
-*/
 double report_running_time() {
 	long sec_diff, usec_diff;
 	gettimeofday(&endTime, &Idunno);
@@ -137,25 +89,20 @@ double report_running_time() {
 }
  
  
-/*
-	print the counts in all buckets of the histogram
-*/
 void output_histogram(bucket *b){
 	int i;
 	long long total_cnt = 0;
 	for(i=0; i< num_buckets; i++) {
-		if(i%5 == 0) /* we print 5 buckets in a row */
+		if(i%5 == 0)
 			printf("\n%02d: ", i);
 		printf("%15lld ", b[i].d_cnt);
 		total_cnt += b[i].d_cnt;
-	  	/* we also want to make sure the total distance count is correct */
 		if(i == num_buckets - 1)
 			printf("\n T:%lld \n", total_cnt);
 		else printf("| ");
 	}
 }
  
-/* Compare CPU and GPU histograms and print the difference histogram */
 bool compare_histograms(bucket *cpu_hist, bucket *gpu_hist) {
     bool match = true;
     printf("\nDifference between CPU and GPU histograms:\n");
@@ -171,11 +118,8 @@ bool compare_histograms(bucket *cpu_hist, bucket *gpu_hist) {
 }
  
  
-/* ============================== GPU code ============================== */
- 
 /* Exact bucket of a pair, computed in double precision with exactly the
-   same operations and rounding as p2p_distance() + PDH_baseline(). The
-   _rn intrinsics stop the compiler from fusing operations into FMAs.   */
+   same operations and rounding as the CPU baseline. */
 __device__ __forceinline__ int exact_bucket(double x1, double y1, double z1,
                                             double x2, double y2, double z2,
                                             double w)
@@ -187,9 +131,6 @@ __device__ __forceinline__ int exact_bucket(double x1, double y1, double z1,
     return (int)__ddiv_rn(__dsqrt_rn(s), w);
 }
  
-/* Bucket of the pair (i, j). The single-precision distance is used when
-   the whole interval [d - margin, d + margin] falls in one bucket;
-   otherwise the pair is recomputed exactly in double precision.        */
 __device__ __forceinline__ int pair_bucket(float xi, float yi, float zi,
                                            float xj, float yj, float zj,
                                            int i, int j,
@@ -209,9 +150,6 @@ __device__ __forceinline__ int pair_bucket(float xi, float yi, float zi,
     return exact_bucket(dX[i], dY[i], dZ[i], dX[j], dY[j], dZ[j], w);
 }
  
-/* Add one count. Buckets inside the shared window go to this warp's
-   private shared copy; the rest (only when the histogram is too big for
-   shared memory) go straight to the global histogram.                  */
 __device__ __forceinline__ void add_count(int h, unsigned int *my_hist,
                                           int win_lo, int win_size,
                                           unsigned long long *g_hist, int nb)
@@ -224,15 +162,6 @@ __device__ __forceinline__ void add_count(int h, unsigned int *my_hist,
         atomicAdd(&g_hist[h], 1ULL);
 }
  
-/*
-	Tiled SDH kernel. Block b owns tile b (points b*B .. b*B+B-1), one
-	point per thread kept in registers. It handles:
-	  - the pairs inside its own tile (when do_intra is set), and
-	  - the pairs between its tile and tiles b+d (mod M) for
-	    d in [d_begin, d_end), streamed through shared memory.
-	For d = M/2 with M even, only the lower-numbered block of the two
-	does the work, so every pair is counted exactly once.
-*/
 __global__ void __launch_bounds__(1024) sdh_tiled_kernel(const float * __restrict__ X,
                                  const float * __restrict__ Y,
                                  const float * __restrict__ Z,
@@ -266,7 +195,6 @@ __global__ void __launch_bounds__(1024) sdh_tiled_kernel(const float * __restric
         zi = Z[i];
     }
  
-    /* pairs inside this block's own tile, balanced circularly */
     if (do_intra) {
         const int cnt = min(B, N - bi * B);
         if (t < cnt) {
@@ -293,16 +221,15 @@ __global__ void __launch_bounds__(1024) sdh_tiled_kernel(const float * __restric
         }
     }
  
-    /* pairs between this tile and the tiles that follow it */
     for (int d = d_begin; d < d_end; d++) {
         int bj = bi + d;
         if (bj >= M) bj -= M;
-        if (2 * d == M && bi > bj)   /* uniform across the block */
+        if (2 * d == M && bi > bj)
             continue;
  
         const int j0 = bj * B;
         const int cnt = min(B, N - j0);
-        __syncthreads();             /* previous tile no longer in use */
+        __syncthreads();
         if (t < cnt) {
             sx[t] = X[j0 + t];
             sy[t] = Y[j0 + t];
@@ -320,7 +247,6 @@ __global__ void __launch_bounds__(1024) sdh_tiled_kernel(const float * __restric
         }
     }
  
-    /* merge the private copies and flush them to global memory once */
     __syncthreads();
     for (int k = t; k < win_size; k += B) {
         unsigned long long sum = 0;
@@ -331,8 +257,6 @@ __global__ void __launch_bounds__(1024) sdh_tiled_kernel(const float * __restric
     }
 }
  
- 
-/* ============================ host helpers ============================ */
  
 static void usage(const char *prog)
 {
@@ -369,7 +293,6 @@ int main(int argc, char **argv)
 {
 	int i;
  
-	/* ---------------------- validate the input ---------------------- */
 	if (argc != 4) {
 		fprintf(stderr, "Error: expected 3 arguments, got %d.\n", argc - 1);
 		usage(argv[0]);
@@ -423,30 +346,25 @@ int main(int argc, char **argv)
 	}
  
 	srand(1);
-	/* generate data following a uniform distribution */
 	for(i = 0;  i < PDH_acnt; i++) {
 		atom_list[i].x_pos = ((double)(rand()) / RAND_MAX) * BOX_SIZE;
 		atom_list[i].y_pos = ((double)(rand()) / RAND_MAX) * BOX_SIZE;
 		atom_list[i].z_pos = ((double)(rand()) / RAND_MAX) * BOX_SIZE;
 	}
  
-	/* --------------------------- CPU SDH ---------------------------- */
 #if SHOW_EXTRA_TIMING
-	/* start counting time */
 	gettimeofday(&startTime, &Idunno);
 #endif
  
 	PDH_baseline();
  
 #if SHOW_EXTRA_TIMING
-	/* check the total running time */
 	double cpu_time = report_running_time();
 #endif
  
 	printf("\nCPU histogram:\n");
 	output_histogram(histogram);
  
-	/* --------------------- GPU data preparation --------------------- */
 	int N = (int)PDH_acnt;
 	float  *hX = (float *)malloc(sizeof(float) * N);
 	float  *hY = (float *)malloc(sizeof(float) * N);
@@ -486,7 +404,6 @@ int main(int argc, char **argv)
 	CUDA_CHECK(cudaMemcpy(ddZ, hdZ, sizeof(double) * N, cudaMemcpyHostToDevice));
 	CUDA_CHECK(cudaMemset(d_hist, 0, sizeof(unsigned long long) * num_buckets));
  
-	/* ------------------ shared memory configuration ------------------ */
 	int smem_optin = 0;
 	CUDA_CHECK(cudaDeviceGetAttribute(&smem_optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, dev));
 	if (smem_optin < (int)prop.sharedMemPerBlock)
@@ -498,7 +415,6 @@ int main(int argc, char **argv)
 	size_t smem_bytes;
  
 	if (tile_bytes + hist_bytes <= DEFAULT_SMEM_BYTES) {
-		/* whole histogram fits: use several private copies per block */
 		int warps = (block_size + 31) / 32;
 		n_copies = (int)(COPIES_SMEM_BYTES / hist_bytes);
 		if (n_copies > warps) n_copies = warps;
@@ -506,10 +422,6 @@ int main(int argc, char **argv)
 		if (n_copies < 1) n_copies = 1;
 		win_size = num_buckets;
 	} else {
-		/* big histogram: one shared copy, as large as the GPU allows,
-		   covering the busiest window; the rest goes to global memory.
-		   For uniform points in a cube the distances cluster around
-		   ~0.66 * BOX_SIZE, so the window is centred near there.      */
 		if (tile_bytes + sizeof(unsigned int) > (size_t)smem_optin) {
 			fprintf(stderr, "Error: block_size %d needs more shared memory than this GPU has.\n",
 			        block_size);
@@ -527,11 +439,8 @@ int main(int argc, char **argv)
 		CUDA_CHECK(cudaFuncSetAttribute(sdh_tiled_kernel,
 		           cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem_bytes));
  
-	/* ------------------------- launch plan --------------------------- */
-	int M = (N + block_size - 1) / block_size;   /* number of tiles  */
-	int D = M / 2;                               /* offsets 1..M/2   */
-	/* keep each 32-bit shared counter below 2^32 within one launch:
-	   a block counts at most B*B pairs per offset plus B*B/2 intra pairs */
+	int M = (N + block_size - 1) / block_size;
+	int D = M / 2;
 	long long pairs_per_offset = (long long)block_size * block_size;
 	long long max_offsets = (4294967295LL - pairs_per_offset) / pairs_per_offset;
 	if (max_offsets < 1) max_offsets = 1;
@@ -542,7 +451,6 @@ int main(int argc, char **argv)
 	CUDA_CHECK(cudaEventCreate(&start));
 	CUDA_CHECK(cudaEventCreate(&stop));
  
-	/* ---------------------- timed kernel launches -------------------- */
 	CUDA_CHECK(cudaEventRecord(start, 0));
 	int d_begin = 1;
 	int first = 1;
@@ -565,7 +473,6 @@ int main(int argc, char **argv)
 	CUDA_CHECK(cudaMemcpy(gpu_histogram, d_hist, sizeof(bucket) * num_buckets,
 	                      cudaMemcpyDeviceToHost));
  
-	/* ---------------------------- output ----------------------------- */
 	printf("\nGPU histogram:\n");
 	output_histogram(gpu_histogram);
  
@@ -577,7 +484,6 @@ int main(int argc, char **argv)
 	printf("\nSpeedup over CPU: %.2fx\n", (cpu_time * 1000) / elapsed_ms);
 #endif
  
-	/* ---------------------------- cleanup ---------------------------- */
 	CUDA_CHECK(cudaEventDestroy(start));
 	CUDA_CHECK(cudaEventDestroy(stop));
 	cudaFree(dX); cudaFree(dY); cudaFree(dZ);
