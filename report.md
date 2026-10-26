@@ -43,7 +43,7 @@ Most GPUs run double-precision arithmetic many times slower than single precisio
 | Points | Pairs | CPU time | GPU kernel time | Speedup over CPU |
 |---|---|---|---|---|
 | 1,000 | 499,500 | not measured | 0.0002 s | n/a |
-| 10,000 | 49,995,000 | *pending* | *pending* | *pending* |
+| 10,000 | 49,995,000 | 1.02 s | 0.0013 s | **752x** |
 | 100,000 | 4,999,950,000 | 101.23 s | 0.0586 s | **1,726x** |
 | 500,000 | 124,999,750,000 | ~1 hour (assignment reference) | not measured* | n/a |
 
@@ -51,15 +51,15 @@ Most GPUs run double-precision arithmetic many times slower than single precisio
 
 I repeated the 100,000-point run, and it took 0.0586 s and 0.0589 s, so the timing is stable to within about 0.5%. At 100,000 points the kernel processes about **85 billion point pairs per second** (4.99995 x 10^9 pairs / 0.0586 s).
 
-**Table 2. Comparison with the reference timings given in the assignment** (100,000 points)
+**Table 2. Comparison with the reference timings given in the assignment**
 
-| Version | Kernel time |
-|---|---|
-| Course reference, GPU Project 1 (2025) | 1,880 ms |
-| Course reference, GPU Project 2 (2025) | 500 ms |
-| **This implementation (GTX 1080 Ti)** | **58.6 ms** |
+| Version | 10,000 points | 100,000 points |
+|---|---|---|
+| Course reference, GPU Project 1 (2025) | 25 ms | 1,880 ms |
+| Course reference, GPU Project 2 (2025) | 8.6 ms | 500 ms |
+| **This implementation (GTX 1080 Ti)** | **1.3 ms** | **58.6 ms** |
 
-The reference timings come from a different year and possibly different hardware, so this comparison is only approximate. Even so, this implementation runs about 8.5x faster than the 2025 Project 2 reference and about 32x faster than the 2025 Project 1 reference.
+The reference timings come from a different year and possibly different hardware, so this comparison is only approximate. Even so, this implementation runs about 6.6x (10k) and 8.5x (100k) faster than the 2025 Project 2 reference, and about 19x and 32x faster than the 2025 Project 1 reference.
 
 <!-- Optional: add these tables once the runs are done, or delete them.
 
@@ -80,5 +80,7 @@ The reference timings come from a different year and possibly different hardware
 ## 4. Discussion
 
 The speedup comes mostly from three of the techniques in Section 2. First, tiling: every point loaded from global memory is reused by all 256 threads of the block, so the kernel spends its time on arithmetic rather than memory traffic. Second, the single-precision filter: the GTX 1080 Ti runs double-precision arithmetic at only 1/32 of its single-precision rate, so computing distances in float and falling back to double only for the roughly 0.04% of pairs near a bucket boundary (at width 500) avoids most of that cost while keeping the result exact. Third, privatized shared-memory histograms: with only 80 buckets, a single shared copy would have many threads competing for the same counters, so giving each warp its own copy keeps atomic contention low. The circular tile assignment also means every block does the same amount of work, so the GPU stays fully occupied until the end of the kernel.
+
+The speedup grows with problem size: 752x at 10,000 points against 1,726x at 100,000 points. With block size 256, 10,000 points form only 40 tiles, so the kernel launches 40 blocks on the 1080 Ti's 28 SMs. Most SMs get one or two blocks, too few warps to hide memory and instruction latency, and fixed costs such as clearing and flushing the shared histograms count for more. At 100,000 points there are 391 blocks, enough to keep every SM busy. The kernel time grows by about 45x for 100x more pairs, which shows that the GPU is used more efficiently at larger sizes.
 
 Correctness was never traded for speed. The GPU histogram matched the CPU histogram bit-for-bit in every run, because any distance near a bucket boundary is recomputed with exactly the same double-precision operations as the CPU code.
