@@ -49,6 +49,11 @@
 #define COPIES_SMEM_BYTES	(16 * 1024)
 #define MAX_HIST_COPIES		16
 
+/* Optional extra output, as in Project 1: CPU running time and GPU speedup.
+   Set to 1 for timing experiments. Keep it 0 for submission, since the
+   required output is only the histograms, differences and kernel time. */
+#define SHOW_EXTRA_TIMING	0
+
 /* descriptors for single atom in the tree */
 typedef struct atomdesc {
 	double x_pos;
@@ -115,6 +120,22 @@ int PDH_baseline() {
 		}
 	}
 	return 0;
+}
+
+/*
+	set a checkpoint and show the (natural) running time in seconds
+*/
+double report_running_time() {
+	long sec_diff, usec_diff;
+	gettimeofday(&endTime, &Idunno);
+	sec_diff = endTime.tv_sec - startTime.tv_sec;
+	usec_diff= endTime.tv_usec-startTime.tv_usec;
+	if(usec_diff < 0) {
+		sec_diff --;
+		usec_diff += 1000000;
+	}
+	printf("Running time for CPU version: %ld.%06ld s\n", sec_diff, usec_diff);
+	return (double)(sec_diff*1.0 + usec_diff/1000000.0);
 }
 
 
@@ -412,7 +433,17 @@ int main(int argc, char **argv)
 	}
 
 	/* --------------------------- CPU SDH ---------------------------- */
+#if SHOW_EXTRA_TIMING
+	/* start counting time */
+	gettimeofday(&startTime, &Idunno);
+#endif
+
 	PDH_baseline();
+
+#if SHOW_EXTRA_TIMING
+	/* check the total running time */
+	double cpu_time = report_running_time();
+#endif
 
 	printf("\nCPU histogram:\n");
 	output_histogram(histogram);
@@ -543,6 +574,10 @@ int main(int argc, char **argv)
 	compare_histograms(histogram, gpu_histogram);
 
 	printf("\n******** Total Kernel Execution Time = %.4f sec *******\n", elapsed_ms / 1000.0);
+
+#if SHOW_EXTRA_TIMING
+	printf("\nSpeedup over CPU: %.2fx\n", (cpu_time * 1000) / elapsed_ms);
+#endif
 
 	/* ---------------------------- cleanup ---------------------------- */
 	CUDA_CHECK(cudaEventDestroy(start));
