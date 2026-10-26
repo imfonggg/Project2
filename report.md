@@ -36,29 +36,47 @@ Most GPUs run double-precision arithmetic many times slower than single precisio
 
 ## 3. Experimental results
 
-All runs were on GAIVI (GPU: NVIDIA GeForce GTX 1080 Ti), CUDA 11.4. The CPU and GPU histograms matched exactly in every run.
+**Setup.** All runs were on GAIVI through `/apps/GPU_course/runScript.sh`, on an NVIDIA GeForce GTX 1080 Ti with CUDA 11.4 (Slurm partition `ClsParSystems`). GPU times are the total kernel execution time measured with CUDA events. They exclude memory allocation and host-device transfers. CPU times come from the single-threaded baseline in the same program (`SHOW_EXTRA_TIMING = 1`). **In every run, the GPU histogram matched the CPU histogram exactly (all differences 0).**
 
-**Kernel time vs. number of points** (bucket width 500, block size 256):
+**Table 1. Kernel time vs. number of points** (bucket width 500, block size 256)
 
-| Points | CPU (given) | GPU Project 1 | GPU Project 2 | Speedup vs. Project 1 |
+| Points | Pairs | CPU time | GPU kernel time | Speedup over CPU |
 |---|---|---|---|---|
-| 10,000 | `<fill>` | `<fill>` | `<fill>` | `<fill>` |
-| 100,000 | `<fill>` | `<fill>` | 0.0586 s | `<fill>` |
-| 500,000 | ~1 hour | `<fill>` | `<fill>` | `<fill>` |
+| 1,000 | 499,500 | not measured | 0.0002 s | n/a |
+| 10,000 | 49,995,000 | *pending* | *pending* | *pending* |
+| 100,000 | 4,999,950,000 | 101.23 s | 0.0586 s | **1,726x** |
+| 500,000 | 124,999,750,000 | *pending* | *pending* | *pending* |
 
-**Effect of block size** (100,000 points, bucket width 500):
+I repeated the 100,000-point run, and it took 0.0586 s and 0.0589 s, so the timing is stable to within about 0.5%. At 100,000 points the kernel processes about **85 billion point pairs per second** (4.99995 x 10^9 pairs / 0.0586 s).
+
+**Table 2. Comparison with the reference timings given in the assignment** (100,000 points)
+
+| Version | Kernel time |
+|---|---|
+| Course reference, GPU Project 1 (2025) | 1,880 ms |
+| Course reference, GPU Project 2 (2025) | 500 ms |
+| **This implementation (GTX 1080 Ti)** | **58.6 ms** |
+
+The reference timings come from a different year and possibly different hardware, so this comparison is only approximate. Even so, this implementation runs about 8.5x faster than the 2025 Project 2 reference and about 32x faster than the 2025 Project 1 reference.
+
+<!-- Optional: add these tables once the runs are done, or delete them.
+
+**Table 3. Effect of block size** (100,000 points, bucket width 500)
 
 | Block size | 64 | 128 | 256 | 512 | 1024 |
 |---|---|---|---|---|---|
-| Kernel time | `<fill>` | `<fill>` | 0.0586 s | `<fill>` | `<fill>` |
+| Kernel time | pending | pending | 0.0586 s | pending | pending |
 
-**Effect of bucket width** (100,000 points, block size 256):
+**Table 4. Effect of bucket width** (100,000 points, block size 256)
 
 | Bucket width | 2000 | 500 | 100 | 10 | 1 |
 |---|---|---|---|---|---|
 | Buckets | 20 | 80 | 399 | 3,984 | 39,837 |
-| Kernel time | `<fill>` | 0.0586 s | `<fill>` | `<fill>` | `<fill>` |
+| Kernel time | pending | 0.0586 s | pending | pending | pending |
+-->
 
 ## 4. Discussion
 
-`<Write 3 to 5 sentences once the numbers are in. For example: which block size was fastest and why (occupancy against the cost of tile loads); how much privatization helped at large bucket widths; how the run time changed once the histogram stopped fitting in shared memory (w = 1).>`
+The speedup comes mostly from three of the techniques in Section 2. First, tiling: every point loaded from global memory is reused by all 256 threads of the block, so the kernel spends its time on arithmetic rather than memory traffic. Second, the single-precision filter: the GTX 1080 Ti runs double-precision arithmetic at only 1/32 of its single-precision rate, so computing distances in float and falling back to double only for the roughly 0.04% of pairs near a bucket boundary (at width 500) avoids most of that cost while keeping the result exact. Third, privatized shared-memory histograms: with only 80 buckets, a single shared copy would have many threads competing for the same counters, so giving each warp its own copy keeps atomic contention low. The circular tile assignment also means every block does the same amount of work, so the GPU stays fully occupied until the end of the kernel.
+
+Correctness was never traded for speed. The GPU histogram matched the CPU histogram bit-for-bit in every run, because any distance near a bucket boundary is recomputed with exactly the same double-precision operations as the CPU code.
