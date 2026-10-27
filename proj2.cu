@@ -15,7 +15,7 @@
 #define COPIES_SMEM_BYTES	(16 * 1024)
 #define MAX_HIST_COPIES		16
 
-#define SHOW_EXTRA_TIMING	1
+#define SHOW_EXTRA_TIMING	0
  
 
 typedef struct atomdesc {
